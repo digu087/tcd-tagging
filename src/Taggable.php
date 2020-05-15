@@ -43,8 +43,8 @@ trait Taggable
      */
     public static function bootTaggable()
     {
-        if(static::untagOnDelete()) {
-            static::deleting(function($model) {
+        if (static::untagOnDelete()) {
+            static::deleting(function ($model) {
                 $model->untag();
             });
         }
@@ -75,7 +75,7 @@ trait Taggable
      */
     public function getTagsAttribute()
     {
-        return $this->tagged->map(function(Tagged $item){
+        return $this->tagged->map(function (Tagged $item) {
             return $item->tag;
         });
     }
@@ -93,12 +93,12 @@ trait Taggable
      *
      * @param string|array $tagNames
      */
-    public function addTags($tagNames)
+    public function addTags($tagNames, $level = '')
     {
         $tagNames = TaggingUtility::makeTagArray($tagNames);
 
-        foreach($tagNames as $tagName) {
-            $this->addSingleTag($tagName);
+        foreach ($tagNames as $tagName) {
+            $this->addSingleTag($tagName, $level);
         }
     }
 
@@ -112,6 +112,16 @@ trait Taggable
         return $this->addTags($tagNames);
     }
 
+    public function tagPrimary($tagNames)
+    {
+        return $this->addTags($tagNames, 'primary');
+    }
+
+    public function tagSecondary($tagNames)
+    {
+        return $this->addTags($tagNames, 'secondary');
+    }
+
     /**
      * Return array of the tag names related to the current model
      *
@@ -119,7 +129,21 @@ trait Taggable
      */
     public function tagNames(): array
     {
-        return $this->tagged->map(function($item){
+        return $this->tagged->map(function ($item) {
+            return $item->tag_name;
+        })->toArray();
+    }
+
+    public function tagNamesPrimary(): array
+    {
+        return $this->tagged->where('tag_level', 'primary')->map(function ($item) {
+            return $item->tag_name;
+        })->toArray();
+    }
+
+    public function tagNamesSecondary(): array
+    {
+        return $this->tagged->where('tag_level', 'secondary')->map(function ($item) {
             return $item->tag_name;
         })->toArray();
     }
@@ -131,7 +155,7 @@ trait Taggable
      */
     public function tagSlugs(): array
     {
-        return $this->tagged->map(function($item){
+        return $this->tagged->map(function ($item) {
             return $item->tag_slug;
         })->toArray();
     }
@@ -143,17 +167,52 @@ trait Taggable
      */
     public function untag($tagNames = null)
     {
-        if(is_null($tagNames)) {
+        if (is_null($tagNames)) {
             $tagNames = $this->tagNames();
         }
 
         $tagNames = TaggingUtility::makeTagArray($tagNames);
 
-        foreach($tagNames as $tagName) {
+        foreach ($tagNames as $tagName) {
             $this->removeSingleTag($tagName);
         }
 
-        if(static::shouldDeleteUnused()) {
+        if (static::shouldDeleteUnused()) {
+            TaggingUtility::deleteUnusedTags();
+        }
+    }
+
+
+    public function untagPrimary($tagNames = null)
+    {
+        if (is_null($tagNames)) {
+            $tagNames = $this->tagNamesPrimary();
+        }
+
+        $tagNames = TaggingUtility::makeTagArray($tagNames);
+
+        foreach ($tagNames as $tagName) {
+            $this->removeSingleTag($tagName, 'primary');
+        }
+
+        if (static::shouldDeleteUnused()) {
+            TaggingUtility::deleteUnusedTags();
+        }
+    }
+
+    public function untagSecondary($tagNames = null)
+    {
+        if (is_null($tagNames)) {
+            $tagNames = $this->tagNamesSecondary();
+        }
+
+        $tagNames = TaggingUtility::makeTagArray($tagNames);
+
+        foreach ($tagNames as $tagName) {
+            $this->removeSingleTag($tagName, 'secondary');
+        }
+
+        if (static::shouldDeleteUnused()) {
             TaggingUtility::deleteUnusedTags();
         }
     }
@@ -173,8 +232,40 @@ trait Taggable
 
         $this->untag($deletions);
 
-        foreach($additions as $tagName) {
+        foreach ($additions as $tagName) {
             $this->addSingleTag($tagName);
+        }
+    }
+
+    public function retagPrimary($tagNames)
+    {
+        $tagNames = TaggingUtility::makeTagArray($tagNames);
+        $currentTagNames = $this->tagNamesPrimary();
+
+        $deletions = array_diff($currentTagNames, $tagNames);
+        $additions = array_diff($tagNames, $currentTagNames);
+
+        $this->untagPrimary($deletions);
+
+        foreach ($additions as $tagName) {
+            $this->removeSingleTag($tagName, 'secondary');
+            $this->addSingleTag($tagName, 'primary');
+        }
+    }
+
+
+    public function retagSecondary($tagNames)
+    {
+        $tagNames = TaggingUtility::makeTagArray($tagNames);
+        $currentTagNames = $this->tagNamesSecondary();
+
+        $deletions = array_diff($currentTagNames, $tagNames);
+        $additions = array_diff($tagNames, $currentTagNames);
+
+        $this->untagSecondary($deletions);
+
+        foreach ($additions as $tagName) {
+            $this->addSingleTag($tagName, 'secondary');
         }
     }
 
@@ -188,7 +279,7 @@ trait Taggable
      */
     public function scopeWithAllTags(Builder $query, $tagNames): Builder
     {
-        if(!is_array($tagNames)) {
+        if (!is_array($tagNames)) {
             $tagNames = func_get_args();
             array_shift($tagNames);
         }
@@ -197,7 +288,7 @@ trait Taggable
 
         $className = $query->getModel()->getMorphClass();
 
-        foreach($tagNames as $tagSlug) {
+        foreach ($tagNames as $tagSlug) {
 
             $model = TaggingUtility::taggedModelString();
 
@@ -208,7 +299,7 @@ trait Taggable
                 ->pluck('taggable_id');
 
             $primaryKey = $this->getKeyName();
-            $query->whereIn($this->getTable().'.'.$primaryKey, $tags);
+            $query->whereIn($this->getTable() . '.' . $primaryKey, $tags);
         }
 
         return $query;
@@ -222,11 +313,11 @@ trait Taggable
      * @return Builder
      * @access private
      */
-    public function scopeWithAnyTag(Builder $query, $tagNames): Builder
+    public function scopeWithAnyTag(Builder $query, $tagNames, $level = ''): Builder
     {
-        $tags = $this->assembleTagsForScoping($query, $tagNames);
+        $tags = $this->assembleTagsForScoping($query, $tagNames, $level);
 
-        return $query->whereIn($this->getTable().'.'.$this->getKeyName(), $tags);
+        return $query->whereIn($this->getTable() . '.' . $this->getKeyName(), $tags);
     }
 
     /**
@@ -241,7 +332,7 @@ trait Taggable
     {
         $tags = $this->assembleTagsForScoping($query, $tagNames);
 
-        return $query->whereNotIn($this->getTable().'.'.$this->getKeyName(), $tags);
+        return $query->whereNotIn($this->getTable() . '.' . $this->getKeyName(), $tags);
     }
 
     /**
@@ -249,24 +340,27 @@ trait Taggable
      *
      * @param string $tagName
      */
-    private function addSingleTag($tagName)
+    private function addSingleTag($tagName, $level = '')
     {
         $tagName = trim($tagName);
 
-        if(strlen($tagName) == 0) {
+        if (strlen($tagName) == 0) {
             return;
         }
 
         $tagSlug = TaggingUtility::normalize($tagName);
 
         $previousCount = $this->tagged()->where('tag_slug', '=', $tagSlug)->take(1)->count();
-        if($previousCount >= 1) { return; }
+        if ($previousCount >= 1) {
+            return;
+        }
 
         $model = TaggingUtility::taggedModelString();
 
         $tagged = new $model([
             'tag_name' => TaggingUtility::displayize($tagName),
             'tag_slug' => $tagSlug,
+            'tag_level' => $level,
         ]);
 
         $this->tagged()->save($tagged);
@@ -283,13 +377,15 @@ trait Taggable
      *
      * @param $tagName string
      */
-    private function removeSingleTag($tagName)
+    private function removeSingleTag($tagName, $level = '')
     {
         $tagName = trim($tagName);
 
         $tagSlug = TaggingUtility::normalize($tagName);
 
-        if($count = $this->tagged()->where('tag_slug', '=', $tagSlug)->delete()) {
+        if ($count = $this->tagged()->where('tag_slug', '=', $tagSlug)->when($level, function ($q) use ($level) {
+            return $q->where('tag_level', $level);
+        })->delete()) {
             TaggingUtility::decrementCount($tagName, $tagSlug, $count);
         }
 
@@ -381,9 +477,9 @@ trait Taggable
         }
     }
 
-    private function assembleTagsForScoping($query, $tagNames)
+    private function assembleTagsForScoping($query, $tagNames, $level = '')
     {
-        if(!is_array($tagNames)) {
+        if (!is_array($tagNames)) {
             $tagNames = func_get_args();
             array_shift($tagNames);
         }
@@ -400,10 +496,12 @@ trait Taggable
         $tags = $model::query()
             ->whereIn('tag_slug', $tagNames)
             ->where('taggable_type', $className)
+            ->when($level, function ($q) use ($level) {
+                $q->where('tag_level', $level);
+            })
             ->get()
             ->pluck('taggable_id');
 
         return $tags;
     }
-
 }
